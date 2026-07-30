@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1B2620">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ledger">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<title>Ledger</title>
+<style>
+:root{
+  --ground:#E7E9E4; --surface:#F7F8F5; --line:#C8CDC4;
+  --ink:#1B2620; --muted:#5F6B61;
+  --brass:#A67C2E; --steel:#2E6E7E; --sage:#5B7A4B; --rust:#9E3B2F;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace; --sans:system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans)}
+body{padding-bottom:env(safe-area-inset-bottom)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.pos{color:var(--sage)} .neg{color:var(--rust)}
+header{padding:calc(14px + env(safe-area-inset-top)) 18px 8px;display:flex;align-items:baseline;gap:12px}
+h1{font-size:15px;font-weight:650;letter-spacing:.14em;text-transform:uppercase;margin:0}
+.stamp{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto}
+nav{display:flex;gap:2px;padding:0 18px;border-bottom:1px solid var(--line);overflow-x:auto}
+nav button{background:none;border:0;border-bottom:2px solid transparent;padding:10px 12px;
+  font:inherit;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
+nav button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}
+main{padding:16px 18px 40px;max-width:640px;margin:0 auto}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:2px;padding:14px;margin-bottom:14px}
+.card h2{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:600}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.axis{font-family:var(--mono);font-size:9px;fill:var(--muted)}
+.ladder{display:flex;flex-direction:column;gap:2px}
+.rung{display:grid;grid-template-columns:74px 1fr 92px 22px;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}
+.rung:last-child{border-bottom:0}
+.sym{font-family:var(--mono);font-size:12px;font-weight:600}
+.sub{font-size:10px;color:var(--muted);font-family:var(--mono)}
+.track{position:relative;height:20px}
+.bar{position:absolute;top:6px;height:8px;background:var(--line);border-radius:1px}
+.fill{position:absolute;top:6px;height:8px;border-radius:1px;opacity:.85}
+.mark{position:absolute;top:1px;width:2px;height:18px;background:var(--ink)}
+.amt{text-align:right;font-family:var(--mono);font-size:12px}
+.amt small{display:block;font-size:10px;opacity:.75}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:0 0 6px}
+td{padding:7px 0;border-top:1px solid var(--line);font-family:var(--mono)}
+td:last-child,th:last-child{text-align:right}
+form{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(110px,1fr))}
+input,select,textarea{font:inherit;font-size:13px;padding:8px;border:1px solid var(--line);
+  background:var(--ground);color:var(--ink);border-radius:2px;min-width:0}
+button.go{font:inherit;font-size:13px;padding:8px 14px;background:var(--ink);color:var(--ground);
+  border:0;border-radius:2px;cursor:pointer}
+button.icon-btn{background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px;line-height:1}
+.note{font-size:11px;color:var(--muted);line-height:1.5}
+.warn{border-left:3px solid var(--brass);padding-left:10px}
+.err{border-left:3px solid var(--rust);padding-left:10px}
+.empty{padding:20px 4px;color:var(--muted);font-size:13px;line-height:1.6}
+.chips{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
+.chip::before{content:"";display:inline-block;width:8px;height:8px;margin-right:5px;border-radius:1px;background:currentColor}
+[hidden]{display:none!important}
+.toast{margin-bottom:12px;font-size:12px;padding:8px 12px;border-radius:2px;background:var(--ink);color:var(--ground)}
+</style>
+</head>
+<body>
+<header><h1>Ledger</h1><span class="stamp" id="stamp"></span></header>
+<nav role="tablist" id="nav"></nav>
+<main><div id="toast"></div><div id="panel"></div></main>
+
+<script>
+"use strict";
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+const C = { ground:"#E7E9E4", surface:"#F7F8F5", line:"#C8CDC4", ink:"#1B2620", muted:"#5F6B61",
+  brass:"#A67C2E", steel:"#2E6E7E", sage:"#5B7A4B", rust:"#9E3B2F" };
+const PIE_COLORS = [C.steel, C.brass, C.sage, C.rust, "#7C8B74", "#46586B", "#C79A54", "#8AA399"];
+const money = (n) => (n<0?"-$":"$") + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const pct = (n) => (n>=0?"+":"") + n.toFixed(2) + "%";
+const todayStr = () => new Date().toISOString().slice(0,10);
+const el = (html) => { const t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstElementChild; };
+
+/* ---------- state, persisted to localStorage (this is a real hosted site, not a sandboxed artifact) ---------- */
+const KEY = "ledger-v1";
+function loadState() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { trades: [], goldLots: [], income: [], priceCache: {}, goldSpot: null };
+}
+let state = loadState();
+function persist() { localStorage.setItem(KEY, JSON.stringify(state)); }
+
+function toast(msg) {
+  const box = document.getElementById("toast");
+  box.innerHTML = "";
+  box.appendChild(el(`<div class="toast">${msg}</div>`));
+  setTimeout(() => { box.innerHTML = ""; }, 2600);
+}
+
+/* ---------- CSV helpers for pasted IBKR Activity Statements ---------- */
+function csvSplit(line) {
+  // minimal CSV split honoring double-quoted fields with embedded commas
+  const out = []; let cur = ""; let q = false;
+  for (let i=0;i<line.length;i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"' && line[i+1] === '"') { cur += '"'; i++; }
+      else if (c === '"') q = false;
+      else cur += c;
+    } else {
+      if (c === '"') q = true;
+      else if (c === ",") { out.push(cur); cur = ""; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+function splitIBKRSections(text) {
+  const headers = {}, sections = {};
+  text.trim().split("\n").forEach((line) => {
+    if (!line.trim()) return;
+    const cols = csvSplit(line);
+    if (cols.length < 2) return;
+    const section = cols[0], rowType = cols[1];
+    if (rowType === "Header") headers[section] = cols;
+    else if (rowType === "Data" && headers[section]) {
+      const h = headers[section]; const obj = {};
+      for (let i=2;i<h.length;i++) obj[h[i]] = cols[i];
+      (sections[section] = sections[section] || []).push(obj);
+    }
+  });
+  return sections;
+}
+const plainNumber = (v) => v==null ? NaN : parseFloat(String(v).replace(/,/g,"").trim());
+const looksLikeIBKR = (text) => text.includes("Open Positions,Header,") || text.includes("Trades,Header,") || text.includes("Dividends,Header,");
+
+function ibkrTrades(sections) {
+  const rows = sections["Trades"] || [];
+  const out = []; const fxSkipped = new Set();
+  rows.forEach((r) => {
+    if ((r["Asset Category"] || "").toLowerCase() !== "stocks") return;
+    if (!r.Symbol || !r["Date/Time"]) return;
+    if (r.Currency && r.Currency !== "USD") { fxSkipped.add(r.Symbol); return; }
+    const quantity = plainNumber(r.Quantity);
+    const price = plainNumber(r["T. Price"]);
+    const date = String(r["Date/Time"]).split(",")[0].trim();
+    if (!isFinite(quantity) || !isFinite(price) || !date) return;
+    out.push({ id: crypto.randomUUID(), symbol: r.Symbol.toUpperCase(), date, quantity, price });
+  });
+  return { out, fxSkipped: [...fxSkipped] };
+}
+function ibkrDividends(sections) {
+  const rows = sections["Dividends"] || [];
+  const out = []; let fxSkipped = 0;
+  rows.forEach((r) => {
+    if (!/^[A-Z]{3}$/.test(r.Currency || "")) return;
+    if (r.Currency !== "USD") { fxSkipped++; return; }
+    const amount = plainNumber(r.Amount);
+    if (!isFinite(amount) || amount === 0 || !r.Date || isNaN(Date.parse(r.Date))) return;
+    out.push({ id: crypto.randomUUID(), date: r.Date, kind: "dividend", amount, note: (r.Description||"").slice(0,90) });
+  });
+  return { out, fxSkipped };
+}
+
+/* ---------- derived data ---------- */
+function symbolsHeld() {
+  const set = new Set();
+  state.trades.forEach((t) => set.add(t.symbol));
+  return [...set];
+}
+function holdingsOf(symbol) {
+  return state.trades.filter((t) => t.symbol === symbol).reduce((a,t) => a + t.quantity, 0);
+}
+function avgCostOf(symbol) {
+  const buys = state.trades.filter((t) => t.symbol === symbol && t.quantity > 0);
+  const qty = buys.reduce((a,t) => a + t.quantity, 0);
+  const cost = buys.reduce((a,t) => a + t.quantity * t.price, 0);
+  return qty ? cost / qty : 0;
+}
+function latestPrice(symbol) {
+  const series = state.priceCache[symbol];
+  if (!series || !series.points.length) return null;
+  return series.points[series.points.length - 1];
+}
+function stockPositions() {
+  return symbolsHeld().map((symbol) => {
+    const quantity = holdingsOf(symbol);
+    if (Math.abs(quantity) < 1e-9) return null;
+    const avgCost = avgCostOf(symbol);
+    const lp = latestPrice(symbol);
+    const price = lp ? lp.close : null;
+    const cost = quantity * avgCost;
+    const value = price != null ? quantity * price : null;
+    return {
+      symbol, quantity, avgCost, cost, price, value,
+      unrealized: value != null ? value - cost : null,
+      unrealizedPct: value != null && cost ? (value/cost - 1) * 100 : null,
+      priceDate: lp ? lp.date : null,
+    };
+  }).filter(Boolean).sort((a,b) => (b.value||0) - (a.value||0));
+}
+function goldValue() {
+  const qty = state.goldLots.reduce((a,l) => a + l.quantity, 0);
+  const cost = state.goldLots.reduce((a,l) => a + l.quantity * l.unitCost, 0);
+  const price = state.goldSpot ? state.goldSpot.price : 0;
+  const value = qty * price;
+  return { qty, cost, price, value, unrealized: value - cost, unrealizedPct: cost ? (value/cost-1)*100 : 0 };
+}
+function totals() {
+  const stocks = stockPositions();
+  const stocksValue = stocks.reduce((a,p) => a + (p.value||0), 0);
+  const stocksCost = stocks.reduce((a,p) => a + p.cost, 0);
+  const g = goldValue();
+  return {
+    value: stocksValue + g.value, cost: stocksCost + g.cost,
+    unrealized: (stocksValue + g.value) - (stocksCost + g.cost),
+    unrealizedPct: (stocksCost+g.cost) ? ((stocksValue+g.value)/(stocksCost+g.cost)-1)*100 : 0,
+    stocksValue, stocksCost, gold: g,
+  };
+}
+
+/* merged daily value/cost series using real fetched prices + trade timeline */
+function buildHistorySeries() {
+  const symbols = symbolsHeld().filter((s) => state.priceCache[s] && state.priceCache[s].points.length);
+  if (!symbols.length) return [];
+  const dateSet = new Set();
+  symbols.forEach((s) => state.priceCache[s].points.forEach((p) => dateSet.add(p.date)));
+  const dates = [...dateSet].sort();
+
+  // forward-filled price index per symbol
+  const priceIdx = {};
+  symbols.forEach((s) => {
+    let i = 0; const pts = state.priceCache[s].points; const map = {};
+    let last = null;
+    dates.forEach((d) => {
+      while (i < pts.length && pts[i].date <= d) { last = pts[i].close; i++; }
+      map[d] = last;
+    });
+    priceIdx[s] = map;
+  });
+
+  const sortedTrades = [...state.trades].sort((a,b) => a.date.localeCompare(b.date));
+  return dates.map((d) => {
+    const heldUpTo = {};
+    sortedTrades.forEach((t) => { if (t.date <= d) heldUpTo[t.symbol] = (heldUpTo[t.symbol]||0) + t.quantity; });
+    let value = 0, cost = 0;
+    Object.entries(heldUpTo).forEach(([sym, qty]) => {
+      const price = priceIdx[sym] ? priceIdx[sym][d] : null;
+      if (price != null) value += qty * price;
+    });
+    sortedTrades.forEach((t) => { if (t.date <= d) cost += t.quantity * t.price; });
+    return { date: d, value, cost };
+  });
+}
+
+/* ---------- fetching from the serverless functions ---------- */
+async function fetchPriceHistory(symbol, start) {
+  const url = `/api/prices?symbol=${encodeURIComponent(symbol)}&start=${start}&end=${todayStr()}`;
+  const r = await fetch(url);
+  const data = await r.json();
+  if (!r.ok || data.error) throw new Error(`${symbol}: ${data.error || r.status}`);
+  return data;
+}
+async function fetchGoldSpot() {
+  const r = await fetch("/api/gold");
+  const data = await r.json();
+  if (!r.ok || data.error) throw new Error(data.error || "gold fetch failed");
+  return data;
+}
+
+/* ---------- charts (hand-rolled SVG, no dependency) ---------- */
+function areaChart(points, color, height=150) {
+  if (!points || points.length < 2) return `<div class="empty">Not enough data yet.</div>`;
+  const W=600,H=height,pad={t:8,r:4,b:18,l:4};
+  const vals = points.map(p=>p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const span = (hi-lo) || Math.abs(hi) || 1;
+  const x = i => pad.l + i*(W-pad.l-pad.r)/(points.length-1);
+  const y = v => pad.t + (1-(v-lo+span*0.08)/(span*1.16))*(H-pad.t-pad.b);
+  const line = points.map((p,i)=>`${i?"L":"M"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join("");
+  const area = `${line}L${x(points.length-1).toFixed(1)},${H-pad.b}L${x(0).toFixed(1)},${H-pad.b}Z`;
+  const gid = "g"+Math.random().toString(36).slice(2,7);
+  const ticks = [0, Math.floor(points.length/2), points.length-1].map(i=>
+    `<text class="axis" x="${x(i)}" y="${H-4}" text-anchor="${i===0?"start":i===points.length-1?"end":"middle"}">${points[i].date.slice(2)}</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}"><defs><linearGradient id="${gid}" x1="0" x2="0" y1="0" y2="1">
+    <stop offset="0" stop-color="${color}" stop-opacity=".22"/><stop offset="1" stop-color="${color}" stop-opacity="0"/>
+    </linearGradient></defs><path d="${area}" fill="url(#${gid})"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round"/>${ticks}</svg>`;
+}
+function pieChart(items, colorOffset=0) {
+  const total = items.reduce((a,i)=>a+i.value,0);
+  if (!items.length || total<=0) return `<div class="empty">Add a couple of holdings to see how they're split.</div>`;
+  const R=70,CX=90,CY=80; let angle=-Math.PI/2;
+  const arcs = items.map((it,i)=>{
+    const frac = it.value/total; const a0=angle; angle += frac*Math.PI*2;
+    const large = frac>0.5?1:0;
+    const x0=CX+R*Math.cos(a0), y0=CY+R*Math.sin(a0);
+    const x1=CX+R*Math.cos(angle), y1=CY+R*Math.sin(angle);
+    const color = PIE_COLORS[(i+colorOffset)%PIE_COLORS.length];
+    return `<path d="M${CX},${CY} L${x0.toFixed(2)},${y0.toFixed(2)} A${R},${R} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} Z" fill="${color}" opacity="0.88"/>`;
+  }).join("");
+  const legend = items.map((it,i)=>{
+    const color = PIE_COLORS[(i+colorOffset)%PIE_COLORS.length];
+    return `<span class="chip" style="color:${color}">${it.label} ${((it.value/total)*100).toFixed(1)}%</span>`;
+  }).join("");
+  return `<svg viewBox="0 0 180 160" style="max-width:220px;margin:0 auto;display:block">${arcs}</svg>
+    <div class="chips" style="justify-content:center;margin-top:8px">${legend}</div>`;
+}
+
+/* ---------- app shell ---------- */
+const TABS = [["overview","Overview"],["stocks","Stocks"],["gold","Gold"],["income","Income"]];
+let tab = "overview";
+
+function renderNav() {
+  const nav = document.getElementById("nav");
+  nav.innerHTML = "";
+  TABS.forEach(([id,label]) => {
+    const b = el(`<button role="tab" aria-selected="${id===tab}">${label}</button>`);
+    b.onclick = () => { tab = id; renderNav(); renderPanel(); };
+    nav.appendChild(b);
+  });
+}
+async function renderPanel() {
+  const panel = document.getElementById("panel");
+  document.getElementById("stamp").textContent = new Date().toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+  panel.innerHTML = "";
+  const renderers = { overview: renderOverview, stocks: renderStocks, gold: renderGold, income: renderIncome };
+  panel.appendChild(await renderers[tab]());
+}
+
+/* ---------- Overview ---------- */
+async function renderOverview() {
+  const t = totals();
+  const history = buildHistorySeries();
+  const wrap = el(`<div></div>`);
+  wrap.appendChild(el(`<div class="card"><h2>Combined value (real prices)</h2>
+    ${areaChart(history.map(h=>({date:h.date,value:h.value})), C.ink, 170)}
+    <p class="note" style="margin-top:8px">Value <span class="num">${money(t.value)}</span> ·
+      cost <span class="num">${money(t.cost)}</span> ·
+      <span class="num ${t.unrealized>=0?"pos":"neg"}">${money(t.unrealized)} unrealized (${pct(t.unrealizedPct)})</span></p>
+    </div>`));
+
+  const rebuild = el(`<div class="card"><h2>Fetch real historical prices</h2>
+    <p class="note">Pulls actual daily closes for every symbol you hold, since your first trade, from a small
+    server that relays public market data (Safari can't fetch this directly - CORS blocks it). No manual downloads.</p>
+    <button class="go" id="rebuildBtn">Fetch &amp; rebuild chart</button>
+    <div id="rebuildStatus" style="margin-top:8px"></div></div>`);
+  rebuild.querySelector("#rebuildBtn").onclick = async (e) => {
+    const btn = e.target, statusEl = rebuild.querySelector("#rebuildStatus");
+    btn.disabled = true; btn.textContent = "Fetching…";
+    const symbols = symbolsHeld();
+    if (!symbols.length) {
+      statusEl.innerHTML = `<p class="note err">No trades yet - paste an IBKR statement or add a position with a purchase date in the Stocks tab first.</p>`;
+      btn.disabled = false; btn.textContent = "Fetch & rebuild chart";
+      return;
+    }
+    let ok = 0; const failed = [];
+    for (const sym of symbols) {
+      const first = state.trades.filter(t=>t.symbol===sym).map(t=>t.date).sort()[0];
+      try {
+        const data = await fetchPriceHistory(sym, first);
+        state.priceCache[sym] = { points: data.points, fetchedAt: Date.now() };
+        ok++;
+      } catch (err) { failed.push(sym); }
+    }
+    persist();
+    statusEl.innerHTML = `<p class="note ${failed.length?"warn":"pos"}">Fetched ${ok} symbol${ok===1?"":"s"}${failed.length?`, couldn't get ${failed.join(", ")} - check the ticker matches Stooq's naming (e.g. non-US listings need a suffix like .uk)`:""}.</p>`;
+    btn.disabled = false; btn.textContent = "Fetch & rebuild chart";
+    renderPanel();
+  };
+  wrap.appendChild(rebuild);
+
+  const kindItems = [
+    { label: "Stocks", value: t.stocksValue },
+    { label: "Gold", value: t.gold.value },
+  ].filter(i => i.value > 0);
+  wrap.appendChild(el(`<div class="card"><h2>Diversification</h2>${pieChart(kindItems)}</div>`));
+
+  const stocks = stockPositions();
+  wrap.appendChild(el(`<div class="card"><h2>All positions</h2>${renderLadder(stocks.map(p=>({...p,kind:"equity"})).concat(goldAsLadderRow()))}</div>`));
+  return wrap;
+}
+function goldAsLadderRow() {
+  const g = goldValue();
+  if (!g.qty) return [];
+  return [{ symbol: "XAU", quantity: g.qty, cost: g.cost, value: g.value, unrealized: g.unrealized, unrealizedPct: g.unrealizedPct, kind: "gold" }];
+}
+
+/* ---------- Ladder (shared) ---------- */
+function renderLadder(items) {
+  const priced = items.filter(i => i.value != null);
+  if (!priced.length) return `<div class="empty">Nothing priced yet.</div>`;
+  const max = Math.max(...priced.map(p=>Math.max(p.value,p.cost)),1);
+  const color = (k) => k==="gold" ? C.brass : C.steel;
+  return `<div class="ladder">` + priced.map(p=>{
+    const cw=(p.cost/max)*100, vw=(p.value/max)*100, gain=p.unrealized>=0;
+    return `<div class="rung">
+      <div><div class="sym">${p.symbol}</div><div class="sub">${p.quantity.toLocaleString(undefined,{maximumFractionDigits:4})}</div></div>
+      <div class="track">
+        <div class="bar" style="width:${cw}%"></div>
+        <div class="fill" style="width:${Math.min(cw,vw)}%;background:${color(p.kind)}"></div>
+        ${gain?`<div class="fill" style="left:${cw}%;width:${vw-cw}%;background:${C.sage}"></div>`
+               :`<div class="fill" style="left:${vw}%;width:${cw-vw}%;background:${C.rust};opacity:.35"></div>`}
+        <div class="mark" style="left:calc(${vw}% - 1px)"></div>
+      </div>
+      <div class="amt">${money(p.value)}<small class="${gain?"pos":"neg"}">${money(p.unrealized)} · ${pct(p.unrealizedPct)}</small></div>
+      <div></div>
+    </div>`;
+  }).join("") + `</div><p class="note" style="margin-top:8px">Grey bar is what you paid (average cost). The tick is today's fetched price.</p>`;
+}
+
+/* ---------- Stocks ---------- */
+async function renderStocks() {
+  const wrap = el(`<div></div>`);
+  const stocks = stockPositions();
+  const history = buildHistorySeries();
+  wrap.appendChild(el(`<div class="card"><h2>Stocks value (real prices)</h2>${areaChart(history.map(h=>({date:h.date,value:h.value})),C.steel)}</div>`));
+  wrap.appendChild(el(`<div class="card"><h2>Diversification</h2>${pieChart(stocks.filter(p=>p.value).map(p=>({label:p.symbol,value:p.value})))}</div>`));
+
+  const importCard = el(`<div class="card"><h2>Import from IBKR statement</h2>
+    <p class="note">Paste the full Activity Statement (multi-section CSV) - the Trades table gives real purchase
+    dates and prices, and Dividends feeds the Income tab automatically.</p>
+    <input type="file" id="stmtFile" accept=".csv,.txt" style="width:100%;font-size:12px;margin-bottom:6px">
+    <textarea id="stmtText" rows="3" placeholder="...or paste here" style="width:100%;font-family:var(--mono);font-size:11px"></textarea>
+    <div style="margin-top:8px"><button class="go" id="stmtImport">Import statement</button></div>
+    <div id="stmtStatus" style="margin-top:8px"></div></div>`);
+  importCard.querySelector("#stmtFile").onchange = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { importCard.querySelector("#stmtText").value = String(reader.result||""); };
+    reader.readAsText(f);
+  };
+  importCard.querySelector("#stmtImport").onclick = () => {
+    const text = importCard.querySelector("#stmtText").value;
+    const statusEl = importCard.querySelector("#stmtStatus");
+    if (!looksLikeIBKR(text)) { statusEl.innerHTML = `<p class="note err">Doesn't look like an IBKR Activity Statement.</p>`; return; }
+    const sections = splitIBKRSections(text);
+    const { out: trades, fxSkipped: tFx } = ibkrTrades(sections);
+    const { out: divs, fxSkipped: dFx } = ibkrDividends(sections);
+    state.trades.push(...trades);
+    state.income.push(...divs);
+    persist();
+    statusEl.innerHTML = `<p class="note pos">Imported ${trades.length} trade${trades.length===1?"":"s"} and ${divs.length} dividend${divs.length===1?"":"s"}.</p>` +
+      (tFx.length ? `<p class="note">Skipped non-USD trades (${tFx.join(", ")}) - no currency conversion here.</p>` : "");
+    renderPanel();
+  };
+  wrap.appendChild(importCard);
+
+  const addForm = el(`<div class="card"><h2>Add a position by hand</h2>
+    <form id="addPosForm">
+      <input name="symbol" placeholder="Symbol" required>
+      <input name="quantity" type="number" step="any" placeholder="Shares" required>
+      <input name="price" type="number" step="any" placeholder="Price paid" required>
+      <input name="date" type="date" value="${todayStr()}" required>
+      <div><button class="go" type="submit">Add</button></div>
+    </form>
+    <p class="note" style="margin-top:6px">Recorded as a purchase on that date, same as an imported trade - so the real price-history fetch above works for it too.</p></div>`);
+  addForm.querySelector("form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    state.trades.push({ id: crypto.randomUUID(), symbol: String(f.get("symbol")).toUpperCase(), quantity: Number(f.get("quantity")), price: Number(f.get("price")), date: f.get("date") });
+    persist(); toast(`Added ${f.get("symbol")}`); renderPanel();
+  };
+  wrap.appendChild(addForm);
+
+  wrap.appendChild(el(`<div class="card"><h2>Holdings</h2>${renderLadder(stocks.map(p=>({...p,kind:"equity"})))}</div>`));
+  return wrap;
+}
+
+/* ---------- Gold ---------- */
+async function renderGold() {
+  const wrap = el(`<div></div>`);
+  const g = goldValue();
+  wrap.appendChild(el(`<div class="card"><h2>Gold</h2>
+    <p class="num" style="font-size:22px;margin:0 0 4px">${money(g.value)}</p>
+    <p class="note">${g.qty.toLocaleString(undefined,{maximumFractionDigits:4})} troy oz ·
+      ${state.goldSpot ? `spot ${money(state.goldSpot.price)}/oz as of ${state.goldSpot.date} (${state.goldSpot.source})` : "no spot price fetched yet"} ·
+      cost <span class="num">${money(g.cost)}</span> ·
+      <span class="num ${g.unrealized>=0?"pos":"neg"}">${money(g.unrealized)} unrealized</span></p>
+    <div style="margin-top:8px"><button class="go" id="fetchGoldBtn">Fetch current spot price</button></div>
+    <div id="goldStatus" style="margin-top:8px"></div></div>`));
+  wrap.querySelector("#fetchGoldBtn").onclick = async (e) => {
+    e.target.disabled = true; e.target.textContent = "Fetching…";
+    try {
+      state.goldSpot = await fetchGoldSpot();
+      persist(); toast("Gold spot updated");
+    } catch (err) {
+      wrap.querySelector("#goldStatus").innerHTML = `<p class="note err">${err.message}</p>`;
+    }
+    renderPanel();
+  };
+
+  const addForm = el(`<div class="card"><h2>Add a lot</h2>
+    <form id="addGoldForm">
+      <input name="quantity" type="number" step="any" placeholder="Troy ounces" required>
+      <input name="unitCost" type="number" step="any" placeholder="Cost per oz" required>
+      <input name="acquiredOn" type="date" value="${todayStr()}" required>
+      <div><button class="go" type="submit">Add</button></div>
+    </form></div>`);
+  addForm.querySelector("form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    state.goldLots.push({ id: crypto.randomUUID(), quantity: Number(f.get("quantity")), unitCost: Number(f.get("unitCost")), acquiredOn: f.get("acquiredOn") });
+    persist(); toast("Lot added"); renderPanel();
+  };
+  wrap.appendChild(addForm);
+
+  wrap.appendChild(el(`<div class="card"><h2>Lots</h2>${
+    state.goldLots.length
+      ? `<table><thead><tr><th>Acquired</th><th>Oz</th><th>Cost/oz</th><th></th></tr></thead><tbody>${
+          state.goldLots.map(l=>`<tr><td>${l.acquiredOn}</td><td>${l.quantity}</td><td>${money(l.unitCost)}</td>
+            <td><button class="icon-btn" data-id="${l.id}">×</button></td></tr>`).join("")
+        }</tbody></table>`
+      : `<div class="empty">No gold recorded yet.</div>`
+  }</div>`));
+  wrap.querySelectorAll("[data-id]").forEach(btn => btn.onclick = () => {
+    state.goldLots = state.goldLots.filter(l => l.id !== btn.dataset.id);
+    persist(); renderPanel();
+  });
+  return wrap;
+}
+
+/* ---------- Income ---------- */
+async function renderIncome() {
+  const wrap = el(`<div></div>`);
+  const months = {};
+  state.income.forEach(e => { const m = e.date.slice(0,7); months[m] = (months[m]||0) + Number(e.amount); });
+  const rows = Object.entries(months).sort(([a],[b])=>a.localeCompare(b));
+  const total = state.income.reduce((a,e)=>a+Number(e.amount),0);
+
+  wrap.appendChild(el(`<div class="card"><h2>Income by month</h2>${
+    rows.length ? barChart(rows) : `<div class="empty">Record income below.</div>`
+  }<p class="note" style="margin-top:8px">Total: <span class="num">${money(total)}</span></p></div>`));
+
+  const kindTotals = {};
+  state.income.forEach(e => { kindTotals[e.kind] = (kindTotals[e.kind]||0) + Number(e.amount); });
+  wrap.appendChild(el(`<div class="card"><h2>Diversification</h2>${pieChart(Object.entries(kindTotals).map(([label,value])=>({label,value})))}</div>`));
+
+  const form = el(`<div class="card"><h2>Record income</h2>
+    <form id="incomeForm">
+      <input name="date" type="date" value="${todayStr()}" required>
+      <select name="kind"><option value="salary">Salary / job</option><option value="dividend">Dividend</option>
+        <option value="interest">Interest</option><option value="other">Other</option></select>
+      <input name="amount" type="number" step="any" placeholder="Amount" required>
+      <input name="note" placeholder="Note (optional)">
+      <div><button class="go" type="submit">Record</button></div>
+    </form></div>`);
+  form.querySelector("form").onsubmit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    state.income.unshift({ id: crypto.randomUUID(), date: f.get("date"), kind: f.get("kind"), amount: Number(f.get("amount")), note: f.get("note")||"" });
+    persist(); toast("Recorded"); renderPanel();
+  };
+  wrap.appendChild(form);
+
+  wrap.appendChild(el(`<div class="card"><h2>Entries</h2>${
+    state.income.length
+      ? `<table><tbody>${state.income.map(e=>`<tr><td>${e.date}</td><td style="color:var(--muted);font-size:11px">${e.kind}</td>
+          <td class="pos">${money(e.amount)}</td><td><button class="icon-btn" data-id="${e.id}">×</button></td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty">Nothing recorded yet.</div>`
+  }</div>`));
+  wrap.querySelectorAll("[data-id]").forEach(btn => btn.onclick = () => {
+    state.income = state.income.filter(e => e.id !== btn.dataset.id);
+    persist(); renderPanel();
+  });
+  return wrap;
+}
+function barChart(rows) {
+  const W=600,H=140,pad={t:8,b:20};
+  const hi = Math.max(...rows.map(([,v])=>v)) || 1;
+  const bw = W/rows.length;
+  return `<svg viewBox="0 0 ${W} ${H}">` +
+    rows.map(([m,v],i)=>{ const h=(v/hi)*(H-pad.t-pad.b);
+      return `<rect x="${i*bw+bw*0.18}" y="${H-pad.b-h}" width="${bw*0.64}" height="${Math.max(h,1)}" fill="${C.sage}" opacity="0.85"/>`;
+    }).join("") +
+    rows.map(([m],i)=> (rows.length<=12||i%3===0) ? `<text class="axis" x="${i*bw+bw/2}" y="${H-6}" text-anchor="middle">${m.slice(2)}</text>` : "").join("") +
+  `</svg>`;
+}
+
+renderNav();
+renderPanel();
+</script>
+</body>
+</html>
