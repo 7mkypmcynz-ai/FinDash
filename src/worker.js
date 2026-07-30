@@ -62,7 +62,7 @@ async function handleGold(ctx) {
 
   let text;
   try {
-    const upstream = await fetch("https://stooq.com/q/l/?s=xauusd&f=sd2t2ohlcv&h&e=csv", {
+    const upstream = await fetch("https://stooq.com/q/d/l/?s=xauusd&i=d", {
       headers: { "User-Agent": "Mozilla/5.0" },
     });
     if (!upstream.ok) return json({ error: `upstream returned ${upstream.status}` }, 502);
@@ -71,14 +71,11 @@ async function handleGold(ctx) {
     return json({ error: "upstream fetch failed", detail: String(e) }, 502);
   }
 
-  const lines = text.trim().split("\n").filter(Boolean);
-  if (lines.length < 2) return json({ error: "no data" }, 502);
-  const header = lines[0].split(",").map((h) => h.trim());
-  const row = lines[1].split(",");
-  const price = parseFloat(row[header.indexOf("Close")]);
-  if (!isFinite(price)) return json({ error: "unreadable price" }, 502);
+  const points = parseStooqCsv(text);
+  if (!points.length) return json({ error: "no gold data returned" }, 502);
+  const last = points[points.length - 1];
 
-  const res = json({ price, date: row[header.indexOf("Date")] || null, source: "stooq" });
+  const res = json({ price: last.close, date: last.date, source: "stooq" });
   res.headers.set("Cache-Control", "public, max-age=3600");
   ctx.waitUntil(cache.put(cacheKey, res.clone()));
   return res;
