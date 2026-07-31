@@ -8,15 +8,16 @@
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const debug = url.searchParams.get("debug") === "1";
 
-    if (url.pathname === "/api/prices") return handlePrices(url, ctx);
-    if (url.pathname === "/api/gold") return handleGold(ctx);
+    if (url.pathname === "/api/prices") return handlePrices(url, ctx, debug);
+    if (url.pathname === "/api/gold") return handleGold(ctx, debug);
 
     return env.ASSETS.fetch(request);
   },
 };
 
-async function handlePrices(url, ctx) {
+async function handlePrices(url, ctx, debug) {
   const raw = (url.searchParams.get("symbol") || "").trim().toLowerCase();
   const start = (url.searchParams.get("start") || "").replace(/-/g, "");
   const end = (url.searchParams.get("end") || new Date().toISOString().slice(0, 10)).replace(/-/g, "");
@@ -24,17 +25,21 @@ async function handlePrices(url, ctx) {
 
   const cache = caches.default;
   const cacheKey = new Request(url.toString());
-  const hit = await cache.match(cacheKey);
-  if (hit) return hit;
+  if (!debug) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit;
+  }
 
   const ticker = raw.includes(".") ? raw : `${raw}.us`;
   const stooqUrl = `https://stooq.com/q/d/l/?s=${encodeURIComponent(ticker)}&i=d${start ? `&d1=${start}` : ""}&d2=${end}`;
 
-  let text;
+  let text, status;
   try {
     const upstream = await fetch(stooqUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-    if (!upstream.ok) return json({ error: `upstream returned ${upstream.status}` }, 502);
+    status = upstream.status;
     text = await upstream.text();
+    if (debug) return new Response(`URL: ${stooqUrl}\nSTATUS: ${status}\n\n${text}`, { headers: { "Content-Type": "text/plain" } });
+    if (!upstream.ok) return json({ error: `upstream returned ${upstream.status}` }, 502);
   } catch (e) {
     return json({ error: "upstream fetch failed", detail: String(e) }, 502);
   }
@@ -54,19 +59,22 @@ async function handlePrices(url, ctx) {
   return res;
 }
 
-async function handleGold(ctx) {
+async function handleGold(ctx, debug) {
   const cache = caches.default;
   const cacheKey = new Request("https://ledger-internal.local/gold-spot");
-  const hit = await cache.match(cacheKey);
-  if (hit) return hit;
+  if (!debug) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit;
+  }
 
-  let text;
+  const stooqUrl = "https://stooq.com/q/d/l/?s=xauusd&i=d";
+  let text, status;
   try {
-    const upstream = await fetch("https://stooq.com/q/d/l/?s=xauusd&i=d", {
-      headers: { "User-Agent": "Mozilla/5.0" },
-    });
-    if (!upstream.ok) return json({ error: `upstream returned ${upstream.status}` }, 502);
+    const upstream = await fetch(stooqUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+    status = upstream.status;
     text = await upstream.text();
+    if (debug) return new Response(`URL: ${stooqUrl}\nSTATUS: ${status}\n\n${text}`, { headers: { "Content-Type": "text/plain" } });
+    if (!upstream.ok) return json({ error: `upstream returned ${upstream.status}` }, 502);
   } catch (e) {
     return json({ error: "upstream fetch failed", detail: String(e) }, 502);
   }
